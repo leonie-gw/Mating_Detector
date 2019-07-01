@@ -2,18 +2,17 @@
 # File: eval.py
 
 import itertools
+import sys
+import os
 import json
 import numpy as np
-import os
-import sys
-import tensorflow as tf
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import cv2
 import pycocotools.mask as cocomask
 import tqdm
-from scipy import interpolate
+import tensorflow as tf
 
 from tensorpack.callbacks import Callback
 from tensorpack.tfutils.common import get_tf_version_tuple
@@ -21,9 +20,9 @@ from tensorpack.utils import logger
 from tensorpack.utils.utils import get_tqdm
 
 from common import CustomResize, clip_boxes
-from config import config as cfg
 from data import get_eval_dataflow
-from dataset import DatasetRegistry
+from dataset import DetectionDataset
+from config import config as cfg
 
 try:
     import horovod.tensorflow as hvd
@@ -42,23 +41,6 @@ mask: None, or a binary image of the original image shape
 """
 
 
-def _scale_box(box, scale):
-    w_half = (box[2] - box[0]) * 0.5
-    h_half = (box[3] - box[1]) * 0.5
-    x_c = (box[2] + box[0]) * 0.5
-    y_c = (box[3] + box[1]) * 0.5
-
-    w_half *= scale
-    h_half *= scale
-
-    scaled_box = np.zeros_like(box)
-    scaled_box[0] = x_c - w_half
-    scaled_box[2] = x_c + w_half
-    scaled_box[1] = y_c - h_half
-    scaled_box[3] = y_c + h_half
-    return scaled_box
-
-
 def _paste_mask(box, mask, shape):
     """
     Args:
@@ -68,42 +50,23 @@ def _paste_mask(box, mask, shape):
     Returns:
         A uint8 binary image of hxw.
     """
-    assert mask.shape[0] == mask.shape[1], mask.shape
+    # int() is floor
+    # box fpcoor=0.0 -> intcoor=0.0
+    x0, y0 = list(map(int, box[:2] + 0.5))
+    # box fpcoor=h -> intcoor=h-1, inclusive
+    x1, y1 = list(map(int, box[2:] - 0.5))    # inclusive
+    x1 = max(x0, x1)    # require at least 1x1
+    y1 = max(y0, y1)
 
-    if True:
-        # This method is accurate but much slower.
-        mask = np.pad(mask, [(1, 1), (1, 1)], mode='constant')
-        box = _scale_box(box, float(mask.shape[0]) / (mask.shape[0] - 2))
+    w = x1 + 1 - x0
+    h = y1 + 1 - y0
 
-        mask_pixels = np.arange(0.0, mask.shape[0]) + 0.5
-        mask_continuous = interpolate.interp2d(mask_pixels, mask_pixels, mask, fill_value=0.0)
-        h, w = shape
-        ys = np.arange(0.0, h) + 0.5
-        xs = np.arange(0.0, w) + 0.5
-        ys = (ys - box[1]) / (box[3] - box[1]) * mask.shape[0]
-        xs = (xs - box[0]) / (box[2] - box[0]) * mask.shape[1]
-        res = mask_continuous(xs, ys)
-        return (res >= 0.5).astype('uint8')
-    else:
-        # This method (inspired by Detectron) is less accurate but fast.
-
-        # int() is floor
-        # box fpcoor=0.0 -> intcoor=0.0
-        x0, y0 = list(map(int, box[:2] + 0.5))
-        # box fpcoor=h -> intcoor=h-1, inclusive
-        x1, y1 = list(map(int, box[2:] - 0.5))    # inclusive
-        x1 = max(x0, x1)    # require at least 1x1
-        y1 = max(y0, y1)
-
-        w = x1 + 1 - x0
-        h = y1 + 1 - y0
-
-        # rounding errors could happen here, because masks were not originally computed for this shape.
-        # but it's hard to do better, because the network does not know the "original" scale
-        mask = (cv2.resize(mask, (w, h)) > 0.5).astype('uint8')
-        ret = np.zeros(shape, dtype='uint8')
-        ret[y0:y1 + 1, x0:x1 + 1] = mask
-        return ret
+    # rounding errors could happen here, because masks were not originally computed for this shape.
+    # but it's hard to do better, because the network does not know the "original" scale
+    mask = (cv2.resize(mask, (w, h)) > 0.5).astype('uint8')
+    ret = np.zeros(shape, dtype='uint8')
+    ret[y0:y1 + 1, x0:x1 + 1] = mask
+    return ret
 
 
 def predict_image(img, model_func):
@@ -119,6 +82,7 @@ def predict_image(img, model_func):
     Returns:
         [DetectionResult]
     """
+
     orig_shape = img.shape[:2]
     resizer = CustomResize(cfg.PREPROC.TEST_SHORT_EDGE_SIZE, cfg.PREPROC.MAX_SIZE)
     resized_img = resizer.augment(img)
@@ -152,7 +116,7 @@ def predict_dataflow(df, model_func, tqdm_bar=None):
 
     Returns:
         list of dict, in the format used by
-        `DatasetSplit.eval_inference_results`
+        `DetectionDataset.eval_or_save_inference_results`
     """
     df.reset_state()
     all_results = []
@@ -161,6 +125,9 @@ def predict_dataflow(df, model_func, tqdm_bar=None):
         if tqdm_bar is None:
             tqdm_bar = stack.enter_context(get_tqdm(total=df.size()))
         for img, img_id in df:
+            if (len(img.shape) == 2):
+                img = np.expand_dims(img, axis=2)
+                img = np.repeat(img, 3, axis=2)
             results = predict_image(img, model_func)
             for r in results:
                 # int()/float() to make it json-serializable
@@ -192,7 +159,7 @@ def multithread_predict_dataflow(dataflows, model_funcs):
 
     Returns:
         list of dict, in the format used by
-        `DatasetSplit.eval_inference_results`
+        `DetectionDataset.eval_or_save_inference_results`
     """
     num_worker = len(model_funcs)
     assert len(dataflows) == num_worker
@@ -284,10 +251,10 @@ class EvalCallback(Callback):
         output_file = os.path.join(
             logdir, '{}-outputs{}.json'.format(self._eval_dataset, self.global_step))
 
-        scores = DatasetRegistry.get(self._eval_dataset).eval_inference_results(
-            all_results, output_file)
+        scores = DetectionDataset().eval_or_save_inference_results(
+            all_results, self._eval_dataset, output_file)
         for k, v in scores.items():
-            self.trainer.monitors.put_scalar(self._eval_dataset + '-' + k, v)
+            self.trainer.monitors.put_scalar(k, v)
 
     def _trigger_epoch(self):
         if self.epoch_num in self.epochs_to_eval:
