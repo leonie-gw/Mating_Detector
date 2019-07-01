@@ -3,8 +3,8 @@
 
 import numpy as np
 import os
-import pprint
 import six
+import pprint
 
 from tensorpack.utils import logger
 from tensorpack.utils.gpu import get_num_gpu
@@ -19,9 +19,6 @@ class AttrDict():
 
     def __getattr__(self, name):
         if self._freezed:
-            raise AttributeError(name)
-        if name.startswith('_'):
-            # Do not mess with internals. Otherwise copy/pickle will fail
             raise AttributeError(name)
         ret = AttrDict()
         setattr(self, name, ret)
@@ -79,26 +76,22 @@ _C = config     # short alias to avoid coding
 
 # mode flags ---------------------
 _C.TRAINER = 'replicated'  # options: 'horovod', 'replicated'
-_C.MODE_MASK = True        # FasterRCNN or MaskRCNN
-_C.MODE_FPN = False
+_C.MODE_MASK = False        # FasterRCNN or MaskRCNN
+_C.MODE_FPN = True
 
 # dataset -----------------------
-_C.DATA.BASEDIR = '/path/to/your/DATA/DIR'
+_C.DATA.BASEDIR = '/scratch/ganswindt/mating_cells/COCO/DIR'
 # All TRAIN dataset will be concatenated for training.
-_C.DATA.TRAIN = ('coco_train2014', 'coco_valminusminival2014')   # i.e. trainval35k, AKA train2017
+_C.DATA.TRAIN = ('train')   # i.e. trainval35k, AKA train2017
 # Each VAL dataset will be evaluated separately (instead of concatenated)
-_C.DATA.VAL = ('coco_minival2014', )  # AKA val2017
+_C.DATA.VAL = ('val', )  # AKA val2017
 # This two config will be populated later by the dataset loader:
-_C.DATA.NUM_CATEGORY = 80  # without the background class (e.g., 80 for COCO)
-_C.DATA.CLASS_NAMES = []  # NUM_CLASS (NUM_CATEGORY+1) strings, the first is "BG".
+_C.DATA.NUM_CATEGORY = 3  # without the background class (e.g., 80 for COCO)
+_C.DATA.CLASS_NAMES = ['background', 'mating', 'single_cell', 'crowd']  # NUM_CLASS (NUM_CATEGORY+1) strings, the first is "BG".
 # whether the coordinates in the annotations are absolute pixel values, or a relative value in [0, 1]
 _C.DATA.ABSOLUTE_COORD = True
-# Number of data loading workers.
-# In case of horovod training, this is the number of workers per-GPU (so you may want to use a smaller number).
-# Set to 0 to disable parallel data loading
-_C.DATA.NUM_WORKERS = 10
 
-# backbone ----------------------
+# basemodel ----------------------
 _C.BACKBONE.WEIGHTS = ''   # /path/to/weights.npz
 _C.BACKBONE.RESNET_NUM_BLOCKS = [3, 4, 6, 3]     # for resnet50
 # RESNET_NUM_BLOCKS = [3, 4, 23, 3]    # for resnet101
@@ -118,11 +111,11 @@ _C.BACKBONE.STRIDE_1X1 = False  # True for MSRA models
 
 # schedule -----------------------
 _C.TRAIN.NUM_GPUS = None         # by default, will be set from code
-_C.TRAIN.WEIGHT_DECAY = 1e-4
-_C.TRAIN.BASE_LR = 1e-2  # defined for total batch size=8. Otherwise it will be adjusted automatically
+_C.TRAIN.WEIGHT_DECAY = 1e-2
+_C.TRAIN.BASE_LR = 1e-4  # defined for total batch size=8. Otherwise it will be adjusted automatically
 _C.TRAIN.WARMUP = 1000   # in terms of iterations. This is not affected by #GPUs
 _C.TRAIN.WARMUP_INIT_LR = 1e-2 * 0.33  # defined for total batch size=8. Otherwise it will be adjusted automatically
-_C.TRAIN.STEPS_PER_EPOCH = 500
+_C.TRAIN.STEPS_PER_EPOCH = 1000
 _C.TRAIN.STARTING_EPOCH = 1  # the first epoch to start with, useful to continue a training
 
 # LR_SCHEDULE means equivalent steps when the total batch size is 8.
@@ -130,12 +123,13 @@ _C.TRAIN.STARTING_EPOCH = 1  # the first epoch to start with, useful to continue
 # the base learning rate are computed from BASE_LR and LR_SCHEDULE.
 # Therefore, there is *no need* to modify the config if you only change the number of GPUs.
 
-_C.TRAIN.LR_SCHEDULE = [120000, 160000, 180000]      # "1x" schedule in detectron
-# _C.TRAIN.LR_SCHEDULE = [240000, 320000, 360000]      # "2x" schedule in detectron
+# _C.TRAIN.LR_SCHEDULE = [120000, 160000, 180000]      # "1x" schedule in detectron
+_C.TRAIN.LR_SCHEDULE = [240000, 320000, 360000]      # "2x" schedule in detectron
 # Longer schedules for from-scratch training (https://arxiv.org/abs/1811.08883):
 # _C.TRAIN.LR_SCHEDULE = [960000, 1040000, 1080000]    # "6x" schedule in detectron
 # _C.TRAIN.LR_SCHEDULE = [1500000, 1580000, 1620000]   # "9x" schedule in detectron
 _C.TRAIN.EVAL_PERIOD = 25  # period (epochs) to run evaluation
+_C.TRAIN.LOSS_WEIGHTS = [0.13, 0.13, 0.46, 0.26]
 
 # preprocessing --------------------
 # Alternative old (worse & faster) setting: 600
@@ -178,7 +172,8 @@ _C.RPN.TEST_PER_LEVEL_NMS_TOPK = 1000
 
 # fastrcnn training ---------------------
 _C.FRCNN.BATCH_PER_IM = 512
-_C.FRCNN.BBOX_REG_WEIGHTS = [10., 10., 5., 5.]  # Slightly better setting: 20, 20, 10, 10
+#_C.FRCNN.BBOX_REG_WEIGHTS = [10., 10., 5., 5.]  # Better but non-standard setting: [20, 20, 10, 10]
+_C.FRCNN.BBOX_REG_WEIGHTS = [20., 20., 10., 10.]
 _C.FRCNN.FG_THRESH = 0.5
 _C.FRCNN.FG_RATIO = 0.25  # fg ratio in a ROI batch
 
@@ -208,7 +203,8 @@ _C.TEST.FRCNN_NMS_THRESH = 0.5
 # Smaller threshold value gives significantly better mAP. But we use 0.05 for consistency with Detectron.
 # mAP with 1e-4 threshold can be found at https://github.com/tensorpack/tensorpack/commit/26321ae58120af2568bdbf2269f32aa708d425a8#diff-61085c48abee915b584027e1085e1043  # noqa
 _C.TEST.RESULT_SCORE_THRESH = 0.05
-_C.TEST.RESULT_SCORE_THRESH_VIS = 0.5   # only visualize confident results
+_C.TEST.RESULT_SCORE_THRESH_VIS = 0.3   # only visualize confident results
+#_C.TEST.RESULTS_PER_IM = 100
 _C.TEST.RESULTS_PER_IM = 100
 
 _C.freeze()  # avoid typo / wrong config keys
@@ -219,6 +215,8 @@ def finalize_configs(is_training):
     Run some sanity checks, and populate some configs from others
     """
     _C.freeze(False)  # populate new keys now
+    _C.DATA.NUM_CLASS = _C.DATA.NUM_CATEGORY + 1  # +1 background
+    _C.DATA.BASEDIR = os.path.expanduser(_C.DATA.BASEDIR)
     if isinstance(_C.DATA.VAL, six.string_types):  # support single string (the typical case) as well
         _C.DATA.VAL = (_C.DATA.VAL, )
 
@@ -247,7 +245,7 @@ def finalize_configs(is_training):
 
     if is_training:
         train_scales = _C.PREPROC.TRAIN_SHORT_EDGE_SIZE
-        if isinstance(train_scales, (list, tuple)) and train_scales[1] - train_scales[0] > 100:
+        if train_scales[1] - train_scales[0] > 100:
             # don't autotune if augmentation is on
             os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
         os.environ['TF_AUTOTUNE_THRESHOLD'] = '1'
@@ -264,13 +262,15 @@ def finalize_configs(is_training):
         else:
             assert 'OMPI_COMM_WORLD_SIZE' not in os.environ
             ngpu = get_num_gpu()
-        assert ngpu > 0, "Has to train with GPU!"
-        assert ngpu % 8 == 0 or 8 % ngpu == 0, "Can only train with 1,2,4 or >=8 GPUs, but found {} GPUs".format(ngpu)
+        #assert ngpu % 8 == 0 or 8 % ngpu == 0, "Can only train with 1,2,4 or >=8 GPUs, but found {} GPUs".format(ngpu)
+        assert ngpu > 0, "Has to run with GPU!"
+        assert ngpu % 8 == 0 or 8 % ngpu == 0, ngpu
     else:
         # autotune is too slow for inference
         os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
         ngpu = get_num_gpu()
 
+    assert ngpu > 0, "Has to run with GPU!"
     if _C.TRAIN.NUM_GPUS is None:
         _C.TRAIN.NUM_GPUS = ngpu
     else:
