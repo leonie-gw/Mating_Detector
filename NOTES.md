@@ -1,15 +1,13 @@
 
 ### File Structure
 This is a minimal implementation that simply contains these files:
-+ train.py,predict.py: main entry script
-+ modeling/generalized_rcnn.py: implement variants of generalized R-CNN architecture
-+ modeling/backbone.py: implement backbones
-+ modeling/model_{fpn,rpn,frcnn,mrcnn,cascade}.py: implement FPN,RPN,Fast/Mask/Cascade R-CNN models.
-+ modeling/model_box.py: implement box-related symbolic functions
-+ dataset/dataset.py: the dataset interface
-+ dataset/coco.py: load COCO data to the dataset interface
++ dataset.py: load and evaluate COCO dataset
 + data.py: prepare data for training & inference
 + common.py: common data preparation utilities
++ basemodel.py: implement backbones
++ model_box.py: implement box-related symbolic functions
++ model_{fpn,rpn,frcnn,mrcnn,cascade}.py: implement FPN,RPN,Fast-/Mask-/Cascade-RCNN models.
++ train.py: main entry script
 + utils/: third-party helper functions
 + eval.py: evaluation utilities
 + viz.py: visualization utilities
@@ -18,28 +16,19 @@ This is a minimal implementation that simply contains these files:
 
 Data:
 
-1. It's easy to train on your own data, by calling `DatasetRegistry.register(name, lambda: YourDatasetSplit())`,
-	 and modify `cfg.DATA.*` accordingly.
+1. It's easy to train on your own data by changing `dataset.py`.
 
-	`YourDatasetSplit` can be:
+   + If your data is in COCO format, modify `COCODetection`
+     to change the class names and the id mapping.
+   + If your data is not in COCO format, ignore `COCODetection` completely and
+     rewrite all the methods of
+     `DetectionDataset` following its documents.
+     You'll implement the logic to load your dataset and evaluate predictions.
 
-   + `COCODetection`, if your data is already in COCO format. In this case, you need to
-		 modify `COCODetection` to change the class names and the id mapping.
-
-   + Your own class, if your data is not in COCO format.
-		 You need to write a subclass of `DatasetSplit`, similar to `COCODetection`.
-     In this class you'll implement the logic to load your dataset and evaluate predictions.
-		 The documentation is in the docstring of `DatasetSplit.
-
-1. If you load a COCO-trained model on a different dataset, you may see error messages
-   complaining about unmatched number of categories for certain weights in the checkpoint.
-   You can either remove those weights in checkpoint, or rename them in the model.
-   See [tensorpack tutorial](https://tensorpack.readthedocs.io/tutorial/save-load.html) for more details.
-
-1. You can easily add more augmentations such as rotation, but be careful how a box should be
-   augmented. The code now will always use the minimal axis-aligned bounding box of the 4 corners,
-   which is probably not the optimal way.
-   A TODO is to generate bounding box from segmentation, so more augmentations can be naturally supported.
+2. You can easily add more augmentations such as rotation, but be careful how a box should be
+	 augmented. The code now will always use the minimal axis-aligned bounding box of the 4 corners,
+	 which is probably not the optimal way.
+	 A TODO is to generate bounding box from segmentation, so more augmentations can be naturally supported.
 
 Model:
 
@@ -49,36 +38,31 @@ Model:
 
 2. We use ROIAlign, and `tf.image.crop_and_resize` is __NOT__ ROIAlign.
 
-3. We currently only support single image per GPU in this example.
+3. We currently only support single image per GPU.
 
 4. Because of (3), BatchNorm statistics are supposed to be freezed during fine-tuning.
 
 5. An alternative to freezing BatchNorm is to sync BatchNorm statistics across
-   GPUs (the `BACKBONE.NORM=SyncBN` option).
-   Another alternative to BatchNorm is GroupNorm (`BACKBONE.NORM=GN`) which has better performance.
+   GPUs (the `BACKBONE.NORM=SyncBN` option). This would require [my bugfix](https://github.com/tensorflow/tensorflow/pull/20360)
+   which is available since TF 1.10. You can manually apply the patch to use it.
+   For now the total batch size is at most 8, so this option does not improve the model by much.
 
-Efficiency:
+6. Another alternative to BatchNorm is GroupNorm (`BACKBONE.NORM=GN`) which has better performance.
+
+Speed:
 
 1. If CuDNN warmup is on, the training will start very slowly, until about
    10k steps (or more if scale augmentation is used) to reach a maximum speed.
    As a result, the ETA is also inaccurate at the beginning.
-   CuDNN warmup is by default enabled when no scale augmentation is used.
+   CuDNN warmup is by default on when no scale augmentation is used.
 
 1. After warmup, the training speed will slowly decrease due to more accurate proposals.
 
-1. The code should have around 80~90% GPU utilization on V100s, and 85%~90% scaling
+1. The code should have around 70% GPU utilization on V100s, and 85%~90% scaling
    efficiency from 1 V100 to 8 V100s.
 
 1. This implementation does not use specialized CUDA ops (e.g. AffineChannel, ROIAlign).
    Therefore it might be slower than other highly-optimized implementations.
-
-1. To reduce RAM usage on host: (1) make sure you're using the "spawn" method as
-   set in `train.py`; (2) reduce `buffer_size` or `NUM_WORKERS` in `data.py`
-   (which may negatively impact your throughput). The training needs <10G RAM if `NUM_WORKERS=0`.
-
-1. Inference is unoptimized. Tensorpack is a training interface, therefore it
-   does not help you on optimized inference. In fact, the current implementation
-   uses some slow numpy operations in inference (in `eval.py:_paste_mask`).
 
 Possible Future Enhancements:
 
@@ -105,7 +89,7 @@ Therefore, not every version of TF ≥ 1.6 supports every feature in this implem
 1. TF < 1.10: `SyncBN` with NCCL will fail ([PR](https://github.com/tensorflow/tensorflow/pull/20360)).
 1. TF 1.11 & 1.12: multithread inference will fail ([issue](https://github.com/tensorflow/tensorflow/issues/22750)).
    Latest tensorpack will apply a workaround.
-1. TF 1.13: MKL inference will fail ([issue](https://github.com/tensorflow/tensorflow/issues/24650)).
+1. TF > 1.12: MKL inference will fail ([issue](https://github.com/tensorflow/tensorflow/issues/24650)).
 1. TF > 1.12: Horovod training will fail ([issue](https://github.com/tensorflow/tensorflow/issues/25946)).
    Latest tensorpack will apply a workaround.
 
