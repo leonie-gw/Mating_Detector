@@ -97,8 +97,9 @@ def image_preprocess(image, bgr=True):
     with tf.name_scope('image_preprocess'):
         if image.dtype.base_dtype != tf.float32:
             image = tf.cast(image, tf.float32)
-
-
+    """
+    No normalization for cell images
+    """
 
 #        mean = cfg.PREPROC.PIXEL_MEAN
 #        std = np.asarray(cfg.PREPROC.PIXEL_STD)

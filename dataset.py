@@ -11,7 +11,6 @@ from tensorpack.utils.timer import timed_operation
 
 from config import config as cfg
 
-#__all__ = ['COCODetection', 'DetectionDataset']
 __all__ = ['COCODetection', 'DetectionDataset', 'COCOMeta']
 
 class _COCOMeta(object):
@@ -43,6 +42,7 @@ class _COCOMeta(object):
 
 
 COCOMeta = _COCOMeta()
+
 
 class COCODetection:
 
@@ -170,8 +170,6 @@ class COCODetection:
         Add 'boxes', 'class', 'is_crowd' of this image to the dict, used by detection.
         If add_mask is True, also add 'segmentation' in coco poly format.
         """
-        # ann_ids = self.coco.getAnnIds(imgIds=img['image_id'])
-        # objs = self.coco.loadAnns(ann_ids)
         objs = self.coco.imgToAnns[img['image_id']]  # equivalent but faster than the above two lines
 
         # clean-up boxes

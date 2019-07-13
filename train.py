@@ -42,7 +42,8 @@ from viz import draw_annotation, draw_final_outputs, draw_predictions, draw_prop
 #except ImportError:
 #    pass
 
-os.environ["CUDA_VISIBLE_DEVICES"] = '2'
+#set GPU, which should be used
+#os.environ["CUDA_VISIBLE_DEVICES"] = '2'
 
 class DetectionModel(ModelDesc):
     def preprocess(self, image):

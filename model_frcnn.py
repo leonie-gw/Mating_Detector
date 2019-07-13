@@ -136,6 +136,7 @@ def fastrcnn_losses(labels, label_logits, fg_boxes, fg_box_logits):
     Returns:
         label_loss, box_loss
     """
+    # changed loss function
     class_weights = tf.constant([0.3, 0.4, 0.3])
     weights = tf.gather(class_weights, labels)
     #tf.losses.sparse_softmax_cross_entropy(labels, logits, weights).eval()

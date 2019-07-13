@@ -46,7 +46,7 @@ Run the script from the command line by:
 Open the Jupyter Notebook: 
 
 ```
-'Visualization_Notebook.ipynb'
+'predict_and_visualize.ipynb'
 ```
 
 and follow the instructions:
